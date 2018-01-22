@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+<title>Flowchart</title>
+<meta name="description" content="Interactive flowchart diagram implemented by GoJS in JavaScript for HTML." />
+<meta charset="UTF-8">
+<link href="flow.css" rel="stylesheet" type="text/css" />
+<script src="go-debug.js"></script>
+<script type="text/javascript" src="json2.js"></script>
+<script type="text/javascript" src="convert.js"></script>
+</head>
+
+
+<body >
+
+  <div style="width:100%; white-space:nowrap;"><!--make all frame in the same horizontal line-->
+    <span style="display: inline-block; vertical-align: top; padding: 5px; width:100px">
+      <div id="myPaletteDiv" style="border: solid 1px gray; height: 600px"></div><br>
+      <button id="flow_button" class="button gray bigrounded" onclick="setMode('link','flow')">Flow</button><br>
+      <br>
+      <button id="flow_button" class="button gray bigrounded" onclick="setMode('link','influence');">Link</button>
+	   <!--<button id="test" class="button gray bigrounded" onclick="checkdata();">check</button>-->
+    </span>
+
+    <span style="display: inline-block; vertical-align: top; padding: 5px; width:80%">
+      <div id="FlowChart" style="border: solid 1px gray; height: 720px"></div>
+    </span>
+  </div>
+
+  <p>
+  The Diagram Model data cab be save to/loaded from the JSON below.
+  </p>
+  <button onclick="layout()" class="button black medium">Re-layout</button>
+  <button id="SaveButton" class="button black medium" onclick="save()">Save</button>
+  <button class="button black medium" onclick="load()">Load</button>
+  <a id= 'a'><button id='btn' class="button black medium" type='button' onclick="down()">Download</button></a>
+  <label for="upload" class="button black medium"><i class="fa fa-cloud-upload"></i>Choose File</label>
+  <form id="myForm"><input id="upload" type="file"/>
+  <textarea id="mySavedModel" style="width:100%;height:300px">{ "class": "go.GraphLinksModel"}
+  </textarea>
+
+
+ <div>
+ <p>
+   Introduction:<br>
+   1. Any icons at the tool bar can be draged to the blank paper.<br>
+   2. The "Link" button can choose the link without arrowhead, and the "Flow" button can choose the link with arrowhead.<br>
+   3. Put the mouse on the incons on paper, can see the link node.<br>
+   4. Click the text in the icon can change the text.<br>
+   5. The "save" button can show the diagram's JSON object in the text area.<br>
+   6. The "load" button can load the diagram from the JSON object in the text area.<br>
+   7. The "re-layout" button can layout the diagram.<br>
+   8. The "choose file" button can upload a JSON file and convert to a diagram.<br>
+   9. The "down" button can download the JSON file of the current JSON object in the text area.<br>
+ </P>
+ </div>
+
+</body>
+
+<script type="text/javascript">
+var bigfont = "bold 13pt Helvetica, Arial, sans-serif";
+var smallfont = "bold 10pt Helvetica, Arial, sans-serif";
+
+function copyNodeData(data) {
+   var copy = {};
+   copy.key = data.key;  // adding to the Model will make the key value unique
+   copy.category = data.category;
+   copy.text = data.text;
+   copy.loc = data.loc;
+   if (data.reasonsList) {
+     var rl = data.reasonsList;
+     var arr = [];
+     for (var i = 0; i < rl.length; i++) {
+       arr.push({ text: rl[i].text });
+     }
+     copy.reasonsList = arr;
+   }
+   // if you add data properties, you should copy them here too
+   return copy;
+ }
+
+ var SD = {
+      mode: "pointer",   // Set to default mode.  Alternatives are "node" and "link", for
+                         // adding a new node or a new link respectively.
+      itemType: "pointer",    // Set when user clicks on a node or link button.
+      //nodeCounter: {stock:0, cloud:0, variable:0, valve:0}
+    };
+
+
+
+  var $ = go.GraphObject.make;  // use $ as an abbreviation for go.GraphObject.make
+
+  //Diagrams act as views to visualize Node and Link
+  var myDiagram =
+    $(go.Diagram, "FlowChart",  // must name or refer to the DIV HTML element
+      {
+        "undoManager.isEnabled": true,  // enable keybord commamd undo & redo
+        "toolManager.mouseWheelBehavior": go.ToolManager.WheelZoom,
+        initialAutoScale: go.Diagram.Uniform,
+        "linkingTool.direction": go.LinkingTool.ForwardsOnly,
+        initialContentAlignment: go.Spot.Center,
+        layout: $(go.LayeredDigraphLayout, { isInitial: false, isOngoing: false, layerSpacing: 50 }),
+        allowDrop:true,
+        allowCopy:true,
+        allowGroup:true,
+        allowClipboard:true,//accepting the drag-and drops function
+        "LinkDrawn": showLinkLabel,  // this DiagramEvent listener is defined below
+        //"LinkRelinked": showLinkLabel,
+        "animationManager.duration": 800, // slightly longer than default (600ms) animation
+        //"clickCreatingTool.archetypeNodeData": { text: "new node" },//by double click can create a step node
+
+          // override the link creation process
+          "linkingTool.insertLink": function(fromnode, fromport, tonode, toport) {
+            // to control what kind of Link is created,
+            // change the LinkingTool.archetypeLinkData's category
+            myDiagram.model.setCategoryForLinkData(this.archetypeLinkData, SD.itemType);
+            // Whenever a new Link is drawng by the LinkingTool, it also adds a node data object
+            // that acts as the label node for the link, to allow links to be drawn to/from the link.
+            //this.archetypeLabelNodeData = (SD.itemType === "flow") ? { category: "valve" } : null;
+            // also change the text indicating the condition, which the user can edit
+            //this.archetypeLinkData.text = SD.itemType;
+            return go.LinkingTool.prototype.insertLink.call(this, fromnode, fromport, tonode, toport);
+          },
+
+          "clickCreatingTool.archetypeNodeData": {},  // enable ClickCreatingTool
+          //"clickCreatingTool.isDoubleClick": false,   // operates on a single click in background
+          "clickCreatingTool.canStart": function() {  // but only in "node" creation mode
+            return SD.mode === "node" && go.ClickCreatingTool.prototype.canStart.call(this);
+          },
+          //"clickCreatingTool.insertPart": function(loc) {  // customize the data for the new node
+            //SD.nodeCounter[SD.itemType] += 1;
+            //var newNodeId = SD.itemType + SD.nodeCounter[SD.itemType];
+            // this.archetypeNodeData = {
+            //   key: newNodeId,
+            //   category: SD.itemType,
+            //   label: newNodeId
+            // }
+          //}
+            //return go.ClickCreatingTool.prototype.insertPart.call(this, loc);}
+
+        });
+
+      function setMode(mode, itemType) {
+      myDiagram.startTransaction();
+
+      SD.mode = mode;
+      SD.itemType = itemType;
+      if (mode === "pointer") {
+        myDiagram.allowLink = false;
+        myDiagram.nodes.each(function(n) { n.port.cursor = ""; });
+      // } else if (mode === "node") {
+      //   myDiagram.allowLink = false;
+      //   myDiagram.nodes.each(function(n) { n.port.cursor = ""; });
+      } else if (mode === "link") {
+        myDiagram.allowLink = true;
+        myDiagram.nodes.each(function(n) { n.port.cursor = "pointer"; });
+      }
+      myDiagram.commitTransaction("mode changed");
+    }
+
+  // when the document is modified, add a "*" to the title and enable the "Save" button
+  myDiagram.addDiagramListener("Modified", function(e) {
+    var button = document.getElementById("SaveButton");
+    if (button) button.disabled = !myDiagram.isModified;
+    var idx = document.title.indexOf("*");
+    if (myDiagram.isModified) {
+      if (idx < 0) document.title += "*";
+    } else {
+      if (idx >= 0) document.title = document.title.substr(0, idx);
+    }
+  });
+
+  // helper definitions for node templates
+
+  function nodeStyle() {
+    return [
+      // The Node.location comes from the "loc" property of the node data,
+      // converted by the Point.parse static method.
+      // If the Node.location is changed, it updates the "loc" property of the node data,
+      // converting back using the Point.stringify static method.
+      //new go.Binding("location", "loc", go.Point.parse).makeTwoWay(go.Point.stringify),
+      {
+        // the Node.location is at the center of each node
+        locationSpot: go.Spot.Center,
+        //isShadowed: true,
+        //shadowColor: "#888",
+        // handle mouse enter/leave events to show/hide the ports
+        mouseEnter: function (e, obj) { showPorts(obj.part, true); },
+        mouseLeave: function (e, obj) { showPorts(obj.part, false); }
+      }
+    ];
+  }
+
+  // Define a function for creating a "port" that is normally transparent.
+  // The "name" is used as the GraphObject.portId, the "spot" is used to control how links connect
+  // and where the port is positioned on the node, and the boolean "output" and "input" arguments
+  // control whether the user can draw links from or to the port.
+  function makePort(name, spot, output, input) {
+    // the port is basically just a small circle that has a white stroke when it is made visible
+    return $(go.Shape, "Circle",
+             {
+                fill: "transparent",
+                stroke: null,  // this is changed to "white" in the showPorts function
+                desiredSize: new go.Size(8, 8),
+                alignment: spot, alignmentFocus: spot,  // align the port on the main Shape
+                portId: name,  // declare this object to be a "port"
+                fromSpot: spot, toSpot: spot,  // declare where links may connect at this port
+                fromLinkable: output, toLinkable: input,  // declare whether the user may draw links to/from here
+                cursor: "pointer"  // show a different cursor to indicate potential link point
+             });
+  }
+
+  // define the Node templates for regular nodes
+
+  var lightText = 'whitesmoke';
+
+
+  var UndesiredEventAdornment =
+      $(go.Adornment, "Spot",
+        $(go.Panel, "Auto",
+          $(go.Shape, { fill: null, stroke: "dodgerblue", strokeWidth: 4 }),
+          $(go.Placeholder)
+        ),
+        // the button to create a "next" node, at the top-right corner
+        $("Button",{ alignment: go.Spot.BottomRight,click: addReason },  // this function is defined below
+          //new go.Binding("visible", "", function(a) { return !a.diagram.isReadOnly; }).ofObject(),
+          $(go.Shape, "TriangleDown", { desiredSize: new go.Size(10, 10) })
+        )
+      );
+
+
+
+var stepsTemplate = $(go.Panel, "Horizontal",
+      $(go.TextBlock, "newItem",
+        {
+          margin: new go.Margin(6,0,0,0),
+          maxSize: new go.Size(200, NaN),
+          wrap: go.TextBlock.WrapFit,
+          stroke: lightText,
+          editable: true,
+          margin: 8,
+          font: bigfont
+        },
+        new go.Binding("text", "text").makeTwoWay())
+      );
+
+myDiagram.nodeTemplateMap.add("Steps",
+  $(go.Node, "Auto",nodeStyle(),
+        //new go.Binding("location", "loc", go.Point.parse).makeTwoWay(go.Point.stringify),
+        { selectionAdornmentTemplate: UndesiredEventAdornment },
+        $(go.Shape, "RoundedRectangle",{ fill: "#660080"}),
+        $(go.Panel, "Vertical",
+        //table header
+        // $(go.TextBlock,"header",
+        //     {
+        //       stroke: lightText,
+        //       minSize: new go.Size(80, NaN),
+        //       margin: 8,
+        //       font: bigfont,
+        //       editable: true
+        //
+        //     },
+        //     new go.Binding("text", "text").makeTwoWay()
+        //   ),
+          $(go.Panel, "Vertical",
+              { //defaultAlignment: go.Spot.TopLeft,
+                itemTemplate: stepsTemplate
+              },
+              new go.Binding("itemArray", "reasonsList").makeTwoWay()
+          ),
+
+         //three named ports, one on each side except the top, all output only:
+        makePort("T", go.Spot.Top, false, true),
+        makePort("L", go.Spot.Left, true, true),
+        makePort("R", go.Spot.Right, true, true),
+        makePort("B", go.Spot.Bottom, true, false)
+         )
+      ));
+
+// var startTemplate = $(go.Panel, "Horizontal",
+//             $(go.TextBlock, "",
+//               {
+//                 margin: new go.Margin(6,0,0,0),
+//                 maxSize: new go.Size(200, NaN),
+//                 wrap: go.TextBlock.WrapFit,
+//                 stroke: lightText,
+//                 editable: true,
+//                 margin: 6,
+//                 font: smallfont
+//               },
+//               new go.Binding("text", "text").makeTwoWay())
+//             );
+myDiagram.nodeTemplateMap.add("Description",
+        $(go.Node, "Auto",nodeStyle(),
+
+              $(go.Shape, "Rectangle",
+                { fill: "#001a00", portId: "", toEndSegmentLength: 50}),
+              $(go.Panel, "Vertical", {defaultAlignment: go.Spot.TopLeft},
+              // $(go.TextBlock,"name:",
+              //     {
+              //       stroke: lightText,
+              //       minSize: new go.Size(80, NaN),
+              //       margin: 6,
+              //       font: bigfont,
+              //       editable: true
+              //     },
+              //     new go.Binding("text", "name").makeTwoWay()
+              //   ),
+                $(go.TextBlock,
+                    {
+                      stroke: lightText,
+                      minSize: new go.Size(80, NaN),
+                      margin: 6,
+                      font: bigfont,
+                      editable: true
+
+                    },
+                    new go.Binding("text").makeTwoWay()
+                ),
+                // $(go.TextBlock,"is_live:",
+                //     {
+                //       stroke: lightText,
+                //       minSize: new go.Size(80, NaN),
+                //       margin: 6,
+                //       font: bigfont,
+                //       editable: true
+                //     },
+                //     new go.Binding("text", "is_live").makeTwoWay()
+                //   ),
+
+
+               //three named ports, one on each side except the top, all output only:
+              makePort("T", go.Spot.Top, true, true),
+              makePort("L", go.Spot.Left, true, true),
+              makePort("R", go.Spot.Right, true, true),
+              makePort("B", go.Spot.Bottom, true, false)
+               )
+            ));
+
+
+  function addReason(e, obj) {
+     var adorn = obj.part;
+     if (adorn === null) return;
+     e.handled = true;
+     var arr = adorn.adornedPart.data.reasonsList;
+     myDiagram.startTransaction("add reason");
+     myDiagram.model.addArrayItem(arr, {});
+     myDiagram.commitTransaction("add reason");
+   }
+
+
+
+myDiagram.nodeTemplateMap.add("Name",
+  $(go.Node, "Spot", nodeStyle(),
+    $(go.Panel, "Auto",
+      $(go.Shape, "Circle",
+        { minSize: new go.Size(40, 40), fill: "#800000", stroke: null }),
+          $(go.TextBlock, "Start",
+            { font: "bold 11pt Helvetica, Arial, sans-serif",
+              stroke: lightText,
+              wrap: go.TextBlock.WrapFit,
+              editable: true
+            },
+            new go.Binding("text").makeTwoWay()
+          )
+        ),
+        // three named ports, one on each side except the top, all output only:
+        makePort("L", go.Spot.Left, true, false),
+        makePort("R", go.Spot.Right, true, false),
+        makePort("B", go.Spot.Bottom, true, false)
+      ));
+
+
+myDiagram.nodeTemplateMap.add("Judgment",  // the default category
+      $(go.Node, "Spot", nodeStyle(),
+        // the main object is a Panel that surrounds a TextBlock with a rectangular Shape
+        $(go.Panel, "Auto",
+          $(go.Shape, "Diamond",
+            { fill: "#ff6600",stroke: null }
+          ),
+          $(go.TextBlock,"Judgment",
+            {
+              font: "bold 11pt Helvetica, Arial, sans-serif",
+              stroke: lightText,
+              margin: 8,
+              maxSize: new go.Size(80, NaN),
+              wrap: go.TextBlock.WrapFit,
+              editable: true
+            },
+            new go.Binding("text").makeTwoWay()
+          )
+        ),
+        // four named ports, one on each side:
+        makePort("T", go.Spot.Top, false, true),
+        makePort("L", go.Spot.Left, true, true),
+        makePort("R", go.Spot.Right, true, true),
+        makePort("B", go.Spot.Bottom, true, false)
+      ));
+
+myDiagram.nodeTemplateMap.add("Answer",
+        $(go.Node, "Auto",nodeStyle(),
+
+              $(go.Shape, "Terminator",
+                { fill: "#204060", portId: "", toEndSegmentLength: 50}),
+      $(go.Panel, "Vertical", {defaultAlignment: go.Spot.Center},
+      $(go.TextBlock, "Answer",
+          { font: smallfont,
+            stroke: lightText,
+            wrap: go.TextBlock.WrapFit,
+            minSize: new go.Size(50, NaN),
+            margin: 4,
+            editable: true
+          },
+          new go.Binding("text").makeTwoWay()
+        ),
+        $(go.TextBlock, "Score",
+          {font: smallfont,
+            stroke: lightText,
+            minSize: new go.Size(50, NaN),
+            //wrap: go.TextBlock.WrapFit,
+            margin: 4,
+            editable: true
+          },
+          new go.Binding("text","score").makeTwoWay()
+        ),
+
+      makePort("T", go.Spot.Top, false, true),
+      makePort("L", go.Spot.Left, false, true),
+      makePort("R", go.Spot.Right, false, true)
+    )
+    ));
+
+myDiagram.nodeTemplateMap.add("Comment",
+    $(go.Node, "Auto", nodeStyle(),
+      $(go.Shape, "File",
+        { fill: "#ffff33", stroke: null }),
+      $(go.TextBlock,
+        {
+          margin: 5,
+          maxSize: new go.Size(200, NaN),
+          wrap: go.TextBlock.WrapFit,
+          textAlign: "center",
+          editable: true,
+          font: "bold 12pt Helvetica, Arial, sans-serif",
+          stroke: '#454545'
+        },
+        new go.Binding("text").makeTwoWay())
+      // no ports, because no links are allowed to connect with a comment
+    ));
+
+
+// replace the default Link template in the linkTemplateMap
+
+//var linkTemplate1=
+myDiagram.linkTemplateMap.add("flow",
+      $(go.Link,  // the whole link panel
+        {
+          routing: go.Link.AvoidsNodes,
+          curve: go.Link.JumpOver,
+          corner: 5, toShortLength: 4,
+          relinkableFrom: true,
+          relinkableTo: true,
+          reshapable: true,
+          resegmentable: true,
+          // mouse-overs subtly highlight links:
+          mouseEnter: function(e, link) { link.findObject("HIGHLIGHT").stroke = "rgba(30,144,255,0.2)"; },
+          mouseLeave: function(e, link) { link.findObject("HIGHLIGHT").stroke = "transparent"; }
+        },
+        //new go.Binding("points").makeTwoWay(),
+        $(go.Shape,  // the highlight shape, normally transparent
+          { isPanelMain: true, strokeWidth: 8, stroke: "transparent", name: "HIGHLIGHT" }),
+        $(go.Shape,  // the link path shape
+          { isPanelMain: true, stroke: "gray", strokeWidth: 2 }),
+        $(go.Shape,  // the arrowhead
+          { toArrow: "standard", stroke: null, fill: "gray"}),
+        $(go.Panel, "Auto",  // the link label, normally not visible
+          { visible: false, name: "LABEL", segmentIndex: 2, segmentFraction: 0.5},
+          new go.Binding("visible", "visible").makeTwoWay(),
+          $(go.Shape, "RoundedRectangle",  // the label shape
+            { fill: "#F8F8F8", stroke: null })
+
+        )
+      ));
+
+
+//var linkTemplate2 =
+myDiagram.linkTemplateMap.add("influence",
+      $(go.Link,  // the whole link panel
+        {
+          routing: go.Link.AvoidsNodes,
+          curve: go.Link.JumpOver,
+          corner: 5, toShortLength: 4,
+          relinkableFrom: true,
+          relinkableTo: true,
+          reshapable: true,
+          resegmentable: true,
+          // mouse-overs subtly highlight links:
+          mouseEnter: function(e, link) { link.findObject("HIGHLIGHT").stroke = "rgba(30,144,255,0.2)"; },
+          mouseLeave: function(e, link) { link.findObject("HIGHLIGHT").stroke = "transparent"; }
+        },
+        //new go.Binding("points").makeTwoWay(),
+        $(go.Shape,  // the highlight shape, normally transparent
+          { isPanelMain: true, strokeWidth: 8, stroke: "transparent", name: "HIGHLIGHT" }),
+        $(go.Shape,  // the link path shape
+          { isPanelMain: true, stroke: "gray", strokeWidth: 2 }),
+
+        $(go.Panel, "Auto",  // the link label, normally not visible
+          { visible: false, name: "LABEL", segmentIndex: 2, segmentFraction: 0.5},
+          new go.Binding("visible", "visible").makeTwoWay(),
+          $(go.Shape, "RoundedRectangle",  // the label shape
+            { fill: "#F8F8F8", stroke: null })
+
+        )
+      ));
+
+      function arrow(){myDiagram.linkTemplate = linkTemplate1;};
+      function noArrow(){myDiagram.linkTemplate = linkTemplate2;};
+
+
+
+
+
+  // Make link labels visible if coming out of a "conditional" node.
+  // This listener is called by the "LinkDrawn" and "LinkRelinked" DiagramEvents.
+  function showLinkLabel(e) {
+    var label = e.subject.findObject("LABEL");
+    if (label !== null) label.visible = (e.subject.fromNode.data.figure === "Diamond");
+  }
+
+  // temporary links used by LinkingTool and RelinkingTool are also orthogonal:
+  myDiagram.toolManager.linkingTool.temporaryLink.routing = go.Link.Orthogonal;
+  myDiagram.toolManager.relinkingTool.temporaryLink.routing = go.Link.Orthogonal;
+
+
+  // initialize the Palette that is on the left side of the page
+var myPalette =
+    $(go.Palette, "myPaletteDiv",  // must name or refer to the DIV HTML element
+      {
+        "animationManager.duration": 800, // slightly longer than default (600ms) animation
+        nodeTemplateMap: myDiagram.nodeTemplateMap,  // share the templates used by myDiagram
+        autoScale: go.Diagram.Uniform  // everything always fits in viewport
+
+      });
+
+myPalette.model.nodeDataArray = [
+  { category: "Name", text: "Name" },
+  //{ category: "Start", name: "name:",description:"description:",is_live:"is_live:"},
+  { category: "Description", text:"description:"},
+  {category: "Steps", reasonsList: [{}] },
+  { category: "Judgment", text: "Y/N" },
+  { category: "Answer", text: "Answer", score:"score" },
+  { category: "Comment", text: "Comment" },
+];
+
+
+
+
+// Make all ports on a node visible when the mouse is over the node
+function showPorts(node, show) {
+  var diagram = node.diagram;
+  if (!diagram || diagram.isReadOnly || !diagram.allowLink) return;
+  node.ports.each(function(port) {
+      port.stroke = (show ? "white" : null);
+    });
+}
+
+
+
+load();
+layout();
+// Show the diagram's model in JSON format that the user may edit
+
+function layout() {
+    myDiagram.layoutDiagram(true);
+  }
+
+
+
+function save() {
+  document.getElementById("mySavedModel").value = myDiagram.model.toJson();
+  myDiagram.isModified = false;
+  down();
+}
+function load() {
+  var str = document.getElementById("mySavedModel").value;
+    myDiagram.model = go.Model.fromJson(str);
+    // Customize the node data copying function
+    myDiagram.model.copyNodeDataFunction = copyNodeData;
+    myDiagram.undoManager.isEnabled = true;
+    layout();
+}
+
+
+
+//upload/import a json file
+//var str;
+var data;
+var index;
+var key;
+var strr;
+//var conStr;
+var arr;
+var i=3;
+var fromfile;
+
+function text(){
+  //converter();
+  var obj=JSON.parse(conStr);
+  myDiagram.model = go.Model.fromJson(obj);
+  myDiagram.model.copyNodeDataFunction = copyNodeData;
+  myDiagram.undoManager.isEnabled = true;
+  layout();
+}
+
+
+var xlf=document.getElementById("upload");
+
+function handleFile(e){
+    var files=e.target.files;
+    var f=files[0];
+    {
+      var reader=new FileReader();
+      var name = f.name;
+      reader.onload=function(e){
+        var data=e.target.result;
+
+        var mtch=data.match("audit");
+
+        if(mtch!=null){
+          fromfile=JSON.parse(data);
+          checkdata();
+          formReset();
+        }
+        else{conStr=data;text();formReset();}
+      }
+      reader.readAsBinaryString(f);
+    }
+
+  }
+
+  // if(xlf.addEventListener)
+if(xlf.addEventListener) xlf.addEventListener('change', handleFile, false);
+
+
+//   function converter(){
+//     conStr="{\"class\": \"go.GraphLinksModel\",\"nodeDataArray\": [{\"category\": \"Start\",";
+//     strr=str;
+// arr=strr.split(",")
+// //for Start Node
+// data=arr[0];
+// index=data.indexOf("\"name\":");
+// data=data.substring(index);
+// conStr=conStr+data+",";
+//
+// data=arr[1];
+// index=data.indexOf("\"description\"");
+// data=data.substring(index);
+// conStr=conStr+data+",";
+//
+// data=arr[2];
+// index=data.indexOf("\"is_live\"");
+// data=data.substring(index);
+// conStr=conStr+data+","+"\"key\": -1},";
+//
+// var i=3;
+// nodes();
+//   }
+//
+//   //For Steps node
+//   function nodes(){
+//   data=arr[i];
+//
+//   ms=data.match("\"steps\"");
+//   if(ms!=null){steps()};
+//
+//   //ms=data.match("\"exit_conditions\"");
+//   //if(ms!=null){exit()};
+//
+//   //document.write(conStr);
+//   //ms=data.match("\"tags\"");
+//   //if(ms!=null){steps()};
+//   }
+//
+//   function steps(){
+//   strr="{\"category\": \"Steps\",\"reasonsList\": [{ \"text\":"+ms+"}],\"key\": -2},";
+//   strr=strr+"{\"category\": \"Steps\",\"reasonsList\": [{";
+//   conStr=conStr+strr;
+//   key=i;
+//   //document.write(arr[i]);
+//   index=data.indexOf("\"name\":");
+//   data=data.substring(index);
+//   data=data.replace("name","text");
+//   //document.write(data);
+//   conStr=conStr+data+"}],\"key\": -"+key+" },";
+//   i++;key++
+//   data=arr[i];
+//   ms=data.match("\"exit_conditions\"");
+//   if(ms!=null){i+=3};
+//   data=arr[i];
+//   ms=data.match("step_actions");
+//   if(ms!=null){action()};
+//
+//   strr="{\"category\": \"Steps\",\"reasonsList\": [{";
+//   data=arr[i];
+//   index=data.indexOf("\"name\":");
+//   data=data.substring(index);
+//   data=data.replace("name","text");
+//   //document.write(data);
+//   //document.write(conStr);
+//   conStr=conStr+strr+data+",\"key\": -"+key+" },";
+//   key++;i++;
+//   //document.write(conStr);
+//   exit();
+//   //document.write(conStr);
+//   }
+//
+//   function action(){
+//   strr="{\"category\": \"Steps\",\"reasonsList\": [{\"text\": \"step_actions\"}],\"key\": -"+key+" },";
+//   key++,i++;
+//   data=arr[i];
+//   strr=strr+"{\"category\": \"Steps\",\"reasonsList\": [{"
+//   index=data.indexOf("\"content");
+//   data=data.substring(index);
+//   data=data.replace("content","text");
+//   strr=strr+data+"],\"key\": -"+key+"},";
+//   key++;i++;
+//   conStr=conStr+strr;
+//
+//   strr="{\"category\": \"Judgment\",";
+//   i++;
+//   data=arr[i];
+//   index=data.indexOf("\"type");
+//   data=data.substring(index);
+//   data=data.replace("content","text");
+//   strr=strr+data+",\"key\": -"+key+"},";
+//   key++;i++;
+//   conStr=conStr+strr;
+//
+//   strr="{\"category\": \"Answer\",";
+//   data=arr[i];
+//   index=data.indexOf("\"content");
+//   data=data.substring(index);
+//   data=data.replace("content","answer");
+//   strr=strr+data+",";
+//   i++;
+//   data=arr[i];
+//   strr=strr+"\"key\": -"+key+","+data+",";
+//   key++;i++;
+//   conStr=conStr+strr;
+//
+//   strr="{\"category\": \"Answer\",";
+//   data=arr[i];
+//   index=data.indexOf("\"content");
+//   data=data.substring(index);
+//   data=data.replace("content","answer");
+//   strr=strr+data+",";
+//   i++;
+//   //document.write(strr);
+//   data=arr[i];
+//   data=data.replace("]}]}","");
+//   strr=strr+"\"key\": -"+key+","+data+",";
+//   //document.write(strr);
+//   //document.write(i);
+//   key++;i++;
+//   conStr=conStr+strr;
+//   //document.write(conStr);
+//   }
+
+  //
+  // function exit(){
+  // strr="{\"category\": \"Steps\",\"reasonsList\": [{\"text\": \"exit_condition\"}],\"key\": -"+key+"},";
+  // key++;
+  // conStr=conStr+strr;
+  //
+  // strr="{\"category\": \"Steps\",\"reasonsList\": [{\"text\":"
+  // data=arr[i];
+  // index=data.indexOf("\"step");
+  // //document.write(data);
+  // data=data.substring(index);
+  // //document.write(data);
+  // datas=data.split("\"");
+  // //document.write(datas);
+  // data="\""+datas[1]+datas[2]+datas[3]+"\"";
+  // //document.write(data);
+  // strr=strr+data+"},{\"text\":";
+  // i++;
+  // data=arr[i];
+  // datas=data.split("\"");
+  // //document.write(datas);
+  // data="\""+datas[1]+datas[2]+datas[3]+"\"";
+  // //document.write(data);
+  // strr=strr+data+"},{\"text\":";
+  // i++;
+  // data=arr[i];
+  // datas=data.split("\"");
+  // //document.write(datas);
+  // data="\""+datas[1]+datas[2]+datas[3]+"\"";
+  // //document.write(data);
+  // strr=strr+data+"},{\"text\":";
+  // i++;
+  // data=arr[i];
+  // datas=data.split("\"");
+  // //document.write(datas);
+  // data="\""+datas[1]+datas[2]+datas[3]+"\"";
+  // //document.write(data);
+  // strr=strr+data+"}],\"key\": -"+key+"},";
+  // key++,i++;
+  // conStr=conStr+strr;
+  //
+  // tags();
+  // //document.write(data);
+  // //document.write(conStr);
+  // }
+  //
+  // function tags(){
+  // strr="{\"category\": \"Steps\",\"reasonsList\": [{\"text\": \"tags\"}],\"key\": -"+key+"},";
+  // key++;
+  // conStr=conStr+strr;
+  //
+  // strr="{\"category\":\"Steps\", \"reasonsList\":[ {";
+  // data=arr[i];
+  // //document.write(data);
+  // index=data.indexOf("\"name");
+  // data=data.substring(index);
+  // data=data.replace("name","text");
+  // //document.write(data);
+  // strr=strr+data+"],\"key\":-"+key+"},";
+  // conStr=conStr+strr;
+  // //document.write(conStr);
+  // key++,i++;
+  //
+  // strr="{\"category\":\"Steps\", \"reasonsList\":[ {";
+  // data=arr[i];
+  // //document.write(data);
+  // index=data.indexOf("\"name");
+  // data=data.substring(index);
+  // data=data.replace("name","text");
+  // var datas=data.split("}");
+  // data=datas[0]
+  // //document.write(data);
+  // strr=strr+data+"}],\"key\":-"+key+"}],";
+  // conStr=conStr+strr;
+  // //document.write(conStr);
+  // linkD();
+  // }
+  //
+  // function linkD(){
+  // strr="\"linkDataArray\":[ {\"from\":-1, \"to\":-2},{\"from\":-1, \"to\":-12},{\"from\":-1, \"to\":-10},{\"from\":-2, \"to\":-3},{\"from\":-2, \"to\":-9},{\"from\":-12, \"to\":-13},{\"from\":-12, \"to\":-14},{\"from\":-3, \"to\":-4},{\"from\":-3, \"to\":-10},{\"from\":-4, \"to\":-5},{\"from\":-4, \"to\":-6},{\"from\":-6, \"to\":-7},{\"from\":-6, \"to\":-8},{\"from\":-10, \"to\":-11}]}";
+  // conStr=conStr+strr;
+  // //document.write(conStr);
+  // }
+
+
+  // function text(){
+  //
+  //   var obj=JSON.parse(str);
+  //   myDiagram.model = go.Model.fromJson(obj);
+  //   }
+  //
+  //   var xlf=document.getElementById("upload");
+  //
+  // function handleFile(e){
+  //     var files=e.target.files;
+  //     var f=files[0];
+  //     {
+  //       var reader=new FileReader();
+  //       var name = f.name;
+  //       reader.onload=function(e){
+  //         var data=e.target.result;
+  //         str=data;
+  //         text();
+  //       }
+  //       reader.readAsBinaryString(f);
+  //     }
+  //
+  //   }
+
+
+
+
+//down load a json file
+
+var a = document.getElementById('a');
+function down(){
+var str = JSON.stringify(document.getElementById("mySavedModel").value);
+var data="text/json;charset=utf-8," + encodeURIComponent(str);
+
+
+a.href = 'data:' + data;
+a.download = 'data.json';
+
+
+}
+
+function checkdata(){
+	var deal = fromfile;
+	var str = init(deal);
+	myDiagram.model = go.Model.fromJson(str);
+	// Customize the node data copying function
+	myDiagram.model.copyNodeDataFunction = copyNodeData;
+	myDiagram.undoManager.isEnabled = true;
+	layout();
+}
+
+function formReset()
+  {
+  document.getElementById("myForm").reset()
+  }
+
+</script>
+
+
+
+
+
+</html>
